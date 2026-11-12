@@ -27,6 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get('THREEDII_ROOT') or os.path.dirname(HERE)  # the standalone app runs from elsewhere: app.py finds the repository
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'win'))
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import build_host  # noqa: E402
 import credits  # noqa: E402
 import decrypt  # noqa: E402
 import dumps  # noqa: E402
@@ -202,10 +204,13 @@ def main():
     ap.add_argument('--mixed', action='store_true', help='trial: fast code with only the video decoder in safe mode (build3ds.Game.mixed)')
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) // 2))
     a = ap.parse_args()
-    if sys.platform != 'win32':
-        fail('Building on Linux isn\'t ready yet: this version builds on Windows.')
+    if a.jobs < 1:
+        fail('--jobs must be at least 1.')
     if not (a.card or a.out):
         fail('Choose an SD card or a folder for the WUP.')
+    problems = build_host.Toolchain(ROOT).problems()
+    if problems:
+        fail('Missing build dependencies:\n  ' + '\n  '.join(problems) + '\nRun python tools/setup.py --check.')
     problem = user_files.check_otp(a.otp)
     if problem:
         fail(problem)
@@ -302,7 +307,7 @@ def main():
     b3 = importlib.util.module_from_spec(spec)
     sys.modules['build3ds'] = b3
     spec.loader.exec_module(b3)
-    b3.WORK = os.path.join(WORK, 'build_win_builder').replace('\\', '/')
+    b3.WORK = os.path.join(WORK, 'build_win_builder' if b3.HOST.win else 'build_linux_builder').replace('\\', '/')
     prepare_logs = b3.prepare_logs
 
     def with_vertex_programs(g):  # the standalone app's logs name vertex programs by fingerprint: this dump's own dvlb.bin has their code
@@ -311,8 +316,6 @@ def main():
         if made or left:
             print(f'vertex records from earlier runs: {made}, and {left} whose program this dump hasn\'t', flush=True)
     b3.prepare_logs = with_vertex_programs
-    if not os.path.exists(b3.BIN + 'gcc.exe'):
-        fail('The build tools aren\'t installed: see builder/README.md.')
     g = b3.Game(info['slug'], game_dir)  # the recipe every game gets, read from this game's own code (build3ds.py)
     if a.mixed:
         g.mixed()

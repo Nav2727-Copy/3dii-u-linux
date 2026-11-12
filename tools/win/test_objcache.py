@@ -18,7 +18,7 @@ try:
     src, head = os.path.join(tmp, 'x.c'), os.path.join(tmp, 'x.h')
     open(head, 'w').write('#define N 3\n')
     open(src, 'w').write('#include "x.h"\nint f(int a) { return a * N; }\n')
-    flags = [b3.BIN + 'gcc.exe', '-O2', '-mcpu=750', f'-I{tmp}']
+    flags = [b3.PPC('gcc'), '-O2', '-mcpu=750', f'-I{tmp}']
     objs = []
     for n in (1, 2, 3):
         if n == 3:

@@ -58,6 +58,7 @@ def fresh_cache(engine, work):
                     return
         import shutil
         shutil.rmtree(os.path.join(work, 'build_win_builder'), ignore_errors=True)
+        shutil.rmtree(os.path.join(work, 'build_linux_builder'), ignore_errors=True)
         os.makedirs(work, exist_ok=True)
         with open(mark, 'w') as f:
             f.write(stamp)
@@ -74,7 +75,7 @@ def use_engine(root):
             fresh_cache(root, work)
         root = short_path(root, work)
         os.environ.setdefault('THREEDII_DEVKITPRO', os.path.join(root, 'devkitpro').replace('\\', '/'))
-        os.environ.setdefault('THREEDII_SHADERGEN', os.path.join(root, 'bin', 'shadergen.exe'))
+        os.environ.setdefault('THREEDII_SHADERGEN', os.path.join(root, 'bin', 'shadergen.exe' if os.name == 'nt' else 'shadergen'))
     os.environ.setdefault('THREEDII_ROOT', root)  # pipeline.py reads these, and the build's own processes inherit them
 
 

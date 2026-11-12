@@ -32,7 +32,9 @@ learned from Maschell's [NUSPacker](https://github.com/Maschell/NUSPacker), but 
 there are no paid builds, no paid beta tiers and no paywalled features. You may use, study, share and change it under the
 EUPL-1.2. If you distribute a changed version, you must offer its source under the same licence.
 
-**Status: beta, Windows only.** [`builder/compat.json`](builder/compat.json) lists the games that have been played on a
+**Status: beta. Standalone releases are for Windows; experimental Linux source builds are described in
+[builder/README.md](builder/README.md#linux-source-builds-experimental).** Linux toolchain and GUI smoke checks pass;
+a complete Linux-built game still needs console validation. [`builder/compat.json`](builder/compat.json) lists the games that have been played on a
 real Wii U. Any other game builds as "untested": it may not start, or it may stop partway.
 
 ## What you need to supply

@@ -27,6 +27,9 @@ never in the code.
 
 ## Setting up
 
+For experimental Linux source builds, follow [the builder's Linux setup](builder/README.md#linux-source-builds-experimental).
+`python tools/setup.py --check` reports dependencies on both platforms. The instructions below cover Windows.
+
 You need Windows 10 or 11 and [Python](https://www.python.org/) 3.10 or newer. Contributions are welcome under the
 project's licence, the [EUPL-1.2](LICENSE). Never add keys, console dumps or anything from a game: see "What never goes into
 the repository" above. Then:
@@ -116,12 +119,20 @@ It writes `builder/dist/3Dii U Builder/`, and a zip of it for testers.
 
 These need no game files and run in seconds:
 
+    python tools/selftest.py
     python builder/test_app.py
     python builder/test_shaderlogs.py
     python builder/selftest.py
 
 `builder/selftest.py` builds a synthetic DLC in memory and runs it through the dump reader. The other two check the
 app's compiled-cache reset and the shader-log fingerprint and recipe round trips.
+
+On Linux, `python tools/test_linux_build.py` also builds the native shader generator, generates GLSL from empty logs,
+and compiles, links, converts and checks a tiny Wii U RPX in a temporary directory. It needs devkitPPC/wut and a host
+C++20 compiler, but no game data or downloaded CafeGLSL/AAC libraries. This does not validate a complete game.
+With all dependencies installed, add `--full` to compile a shader pack, recompile a two-instruction ARM test program,
+link it with the complete Wii U runtime and libraries, and verify a synthetic title's WUP encryption/decryption round
+trip using a random test key. This needs no console files and deletes its temporary outputs.
 
 This one needs your own dumps and Cemu, and checks the ports end to end:
 

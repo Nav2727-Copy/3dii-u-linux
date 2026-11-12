@@ -12,29 +12,32 @@ import build3ds  # noqa: E402  the PC's compiler and where the sources are
 
 def vertex_arrays():
     """port/wiiu/vertex_arrays.h, built for this PC"""
-    exe = build3ds.WORK + '/selftest/test_vertex_arrays.exe'
+    exe = build3ds.WORK + '/selftest/test_vertex_arrays' + build3ds.HOST.suffix
     os.makedirs(os.path.dirname(exe), exist_ok=True)
-    return [build3ds.HOST_CXX + ['-std=c++20', '-w', '-D__WIIU__', f'-I{build3ds.PORT}/wiiu', f'-I{build3ds.PORT}/pc/win', f'-I{build3ds.PORT}/pc', f'-I{build3ds.RT}',
-                                 f'-I{build3ds.RT}/gpu', '-include', f'{build3ds.PORT}/pc/shim.h', '-static', ROOT + '/tools/test_vertex_arrays.cpp', '-o', exe], [exe]]
+    windows = [f'-I{build3ds.PORT}/pc/win', '-static'] if build3ds.HOST.win else []
+    return [build3ds.HOST_CXX + windows + ['-std=c++20', '-w', '-D__WIIU__', f'-I{build3ds.PORT}/wiiu', f'-I{build3ds.PORT}/pc', f'-I{build3ds.RT}',
+                                 f'-I{build3ds.RT}/gpu', '-include', f'{build3ds.PORT}/pc/shim.h', ROOT + '/tools/test_vertex_arrays.cpp', '-o', exe], [exe]]
 
 
 def present_rule():
     """port/wiiu/present_rule.h against made-up frame times, built for this PC"""
-    exe = build3ds.WORK + '/selftest/test_present_rule.exe'
+    exe = build3ds.WORK + '/selftest/test_present_rule' + build3ds.HOST.suffix
     os.makedirs(os.path.dirname(exe), exist_ok=True)
-    return [build3ds.HOST_CXX + ['-std=c++20', '-O1', '-w', f'-I{build3ds.PORT}/wiiu', '-static', ROOT + '/tools/test_present_rule.cpp', '-lpthread', '-o', exe], [exe]]
+    return [build3ds.HOST_CXX + (['-static'] if build3ds.HOST.win else []) + ['-std=c++20', '-O1', '-w', f'-I{build3ds.PORT}/wiiu', ROOT + '/tools/test_present_rule.cpp', '-lpthread', '-o', exe], [exe]]
 
 
 def frame_cap():
     """port/wiiu/frame_cap.h against made-up games, built for this PC"""
-    exe = build3ds.WORK + '/selftest/test_frame_cap.exe'
+    exe = build3ds.WORK + '/selftest/test_frame_cap' + build3ds.HOST.suffix
     os.makedirs(os.path.dirname(exe), exist_ok=True)
-    return [build3ds.HOST_CXX + ['-std=c++20', '-O1', '-w', f'-I{build3ds.PORT}/wiiu', '-static', ROOT + '/tools/test_frame_cap.cpp', '-lpthread', '-o', exe], [exe]]
+    return [build3ds.HOST_CXX + (['-static'] if build3ds.HOST.win else []) + ['-std=c++20', '-O1', '-w', f'-I{build3ds.PORT}/wiiu', ROOT + '/tools/test_frame_cap.cpp', '-lpthread', '-o', exe], [exe]]
 
 
 def main():
     py = sys.executable
     checks = {
+        'build host': [[py, ROOT + '/tools/test_build_host.py']],
+        'dump and mod handling': [[py, ROOT + '/builder/selftest.py']],
         'vertex arrays': vertex_arrays(),
         'present rule': present_rule(),
         'frame cap': frame_cap(),

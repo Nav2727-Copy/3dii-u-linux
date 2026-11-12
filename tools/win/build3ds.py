@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the 3DS-to-Wii-U ports on Windows, with no WSL. Run with Windows Python from anywhere:
+"""Builds the 3DS-to-Wii-U ports on Windows and Linux. Run with Python from anywhere:
 
     build3ds.py code <game>            runtime, game code and link: the RPX and game.nm
     build3ds.py shaders <game>         the shader pack
@@ -12,12 +12,10 @@
 Options: --jobs N (default 4), --force, --extra-flags "...", --only a.cpp,b.cpp (recompile only these runtime files), --opt -O1, --out <folder> (keep a test build apart).
 
 Compiles run at below-normal priority, as many as --jobs, and none starts while the PC is short of free memory, so the PC stays usable.
-Objects go in build_win/. Outputs stay where the title scripts and tools/console_watch.py expect them: build/ for Tomodachi, build_mario/<game>/,
-build_layton/<game>/. Needs tools/win/install_toolchain.sh run once, C:\\msys64 with mingw-w64-x86_64-gcc and LLVM in C:\\Program Files\\LLVM for the trial and the shader generator.
-Game and runtime objects came out byte-identical to the ones WSL's copy of the same compiler made.
+Objects go in build_win/ or build_linux/. See builder/README.md for Linux setup.
+The headless PC trial and lazy compilation commands currently require Windows.
 """
 import argparse
-import ctypes
 import functools
 import glob
 import json
@@ -34,27 +32,27 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # loaded by path (pipeline.py), so its own folder isn't on the path
 import objcache  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import build_host  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).replace('\\', '/')
-WORK = ROOT + '/build_win'
+HOST = build_host.Toolchain(ROOT)
+WORK = ROOT + ('/build_win' if HOST.win else '/build_linux')
 RT = ROOT + '/third_party/3dsrecomp/runtime'
 PORT = ROOT + '/port'
-DKP = os.environ.get('THREEDII_DEVKITPRO') or 'C:/devkitPro/opt/devkitpro'  # the standalone builder brings its own copy
-BIN = DKP + '/devkitPPC/bin/powerpc-eabi-'
-WUT = DKP + '/wut'
-LLVM = 'C:/Program Files/LLVM/bin/'
-MINGW = 'C:/msys64/mingw64'
-GLSLC = ROOT + '/third_party/cafeglsl/glslcompiler.exe'  # v0.2.0, the compiler the console has run: tools/win/build_cafeglsl.ps1
-CAFEGLSL_PPC = ROOT + '/third_party/cafeglsl_ppc/cafeglsl-1.0.0-rc1-wiiu-ppc'  # the same compiler as a library for the console: port/wiiu/shader_compile.cpp. Once installed, run tools/win/patch_cafeglsl_traps.py: Cemu stops at its traps
-HOST_CXX = [LLVM + 'clang++.exe', '--target=x86_64-w64-mingw32', '--sysroot=' + MINGW, '-fuse-ld=lld']
+DKP, WUT = HOST.dkp, HOST.wut
+BIN = HOST.ppc + '/bin/powerpc-eabi-'  # kept for developer scripts that inspect the compiler prefix
+PPC = HOST.ppc_tool
+LLVM, MINGW = HOST.llvm, HOST.mingw
+GLSLC = HOST.glslc  # v0.2.0: newer host versions have not passed the same console checks
+CAFEGLSL_PPC = HOST.cafeglsl_ppc
+HOST_CXX = HOST.host_cxx
 CRO_BASE = '0x1C000000'  # the slots CRO modules' code gets (tools/recomp/cro.py), in the part of the address space the Wii U port leaves free
 FRAGMENT_VARIANTS = 2000  # how many lit-state combinations a game may get compiled ahead (prepare_logs): more and the build and the shader file grow too big
 BELOW_NORMAL = 0x4000
 MIN_FREE_MB = 2500
 
-os.environ['DEVKITPRO'] = DKP
-os.environ['DEVKITPPC'] = DKP + '/devkitPPC'
-os.environ['PATH'] = DKP + '/devkitPPC/bin;' + DKP + '/tools/bin;' + os.environ['PATH']
+os.environ.update(HOST.environment())
 # A game is built without what only measures it: the clock reads behind the log's five-second lines, those lines, and the network console
 # (rt.h's kMeasure). THREEDII_MEASURE in the environment builds with them, for the checks in Cemu (check_ports.py --measure): the runtime
 # and the game then have folders of their own (rt_measure, build_measure/), so the two kinds never mix, and nothing built that way is
@@ -62,21 +60,8 @@ os.environ['PATH'] = DKP + '/devkitPPC/bin;' + DKP + '/tools/bin;' + os.environ[
 MEASURE = bool(os.environ.get('THREEDII_MEASURE'))
 
 
-class MemoryStatus(ctypes.Structure):
-    _fields_ = [('length', ctypes.c_ulong), ('load', ctypes.c_ulong), ('total', ctypes.c_ulonglong), ('avail', ctypes.c_ulonglong),
-                ('total_page', ctypes.c_ulonglong), ('avail_page', ctypes.c_ulonglong), ('total_virtual', ctypes.c_ulonglong),
-                ('avail_virtual', ctypes.c_ulonglong), ('avail_extended', ctypes.c_ulonglong)]
-
-
-def free_mb():
-    m = MemoryStatus()
-    m.length = ctypes.sizeof(m)
-    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
-    return m.avail >> 20
-
-
-def run(argv, **kw):
-    return subprocess.run(argv, creationflags=BELOW_NORMAL, **kw)
+free_mb = build_host.free_mb
+run = build_host.run
 
 
 context = threading.local()  # what a thread's output belongs to (pipeline.py makes shaders alongside the code); run_jobs' workers take their caller's
@@ -397,7 +382,7 @@ def build_runtime(g, args):
         obj = f'{obj_dir}/{obj_name(s)}'
         if only and base not in only and os.path.exists(obj):
             continue
-        items.append((name, real, obj, [BIN + 'g++.exe'] + flags))
+        items.append((name, real, obj, [PPC('g++')] + flags))
     compile_all(items, args.jobs, 'runtime', args.force)
     return obj_dir
 
@@ -408,7 +393,7 @@ GAME_OPT = ['-Os', '-fomit-frame-pointer', '-fno-pic']
 
 
 def game_flags(g, opt=None):
-    return [BIN + 'gcc.exe'] + (shlex.split(opt) if opt else g.opt or GAME_OPT) + ['-mcpu=750', '-meabi', '-mhard-float', '-ffp-contract=off', '-fno-math-errno',
+    return [PPC('gcc')] + (shlex.split(opt) if opt else g.opt or GAME_OPT) + ['-mcpu=750', '-meabi', '-mhard-float', '-ffp-contract=off', '-fno-math-errno',
                                                                                     '-fno-strict-aliasing', '-std=gnu11', '-w', f'-I{PORT}', f'-I{RT}', f'-I{g.gen_dir}']
 
 
@@ -449,9 +434,9 @@ def link_game(g, rt, code, link_flags=None):
         except ValueError:
             return p.replace('\\', '/')
     # the decoder behind the DSP's AAC pipe, in every game: a game that streams AAC is silent without it, and one that doesn't only pays its size
-    a = ROOT + '/toolchain/aac_ppc'
+    a = HOST.aac
     o = f'{WORK}/link/aac_ffmpeg.o'
-    r = run([BIN + 'g++.exe', '-mcpu=750', '-meabi', '-mhard-float', '-O2', '-std=c++20', '-D__WIIU__', f'-I{a}/include', '-c', PORT + '/aac/aac_ffmpeg.cpp', '-o', o])
+    r = run([PPC('g++'), '-mcpu=750', '-meabi', '-mhard-float', '-O2', '-std=c++20', '-D__WIIU__', f'-I{a}/include', '-c', PORT + '/aac/aac_ffmpeg.cpp', '-o', o])
     if r.returncode:
         sys.exit('aac_ffmpeg did not compile')
     aac = [rel(o), rel(a + '/lib/libavcodec.a'), rel(a + '/lib/libavutil.a')]
@@ -468,14 +453,14 @@ def link_game(g, rt, code, link_flags=None):
     # a stamp the game logs at its start ([loader] build ...), so a console run says which build it is: an update title's or the base's
     stamp_c = f'{WORK}/link/stamp.c'
     open(stamp_c, 'w', newline='\n').write(f'const char g_build_stamp[] = "{time.strftime("%Y-%m-%d %H:%M")} {g.name}";\n')
-    if run([BIN + 'gcc.exe', '-mcpu=750', '-meabi', '-mhard-float', '-c', stamp_c, '-o', f'{WORK}/link/stamp.o']).returncode:
+    if run([PPC('gcc'), '-mcpu=750', '-meabi', '-mhard-float', '-c', stamp_c, '-o', f'{WORK}/link/stamp.o']).returncode:
         sys.exit('the build stamp did not compile')
     extra = [rel(f'{WORK}/link/stamp.o')] + shlex.split(link_flags or '')
     # relative paths: a space in the project's path would break the specs file's -T
     # every file call goes to port/wiiu/fsa_direct.cpp first, the C library's too
     wraps = ['-Wl,--wrap=' + f for f in ('FSAOpenFileEx', 'FSACloseFile', 'FSAReadFile', 'FSAWriteFile', 'FSASetPosFile', 'FSAGetStatFile', 'FSAGetStat', 'FSAFlushFile', 'FSATruncateFile',
                                          'FSARemove', 'FSAMakeDir', 'FSARename', 'FSAOpenDir', 'FSAReadDir', 'FSARewindDir', 'FSACloseDir')]
-    argv = [BIN + 'g++.exe', '-mcpu=750', '-meabi', '-mhard-float', '-specs=rpx/rpx.specs', '-Wl,--relax', '-Wl,--no-warn-rwx-segments', f'@link/{g.name}.rsp'] + wraps + aac + extra
+    argv = [PPC('g++'), '-mcpu=750', '-meabi', '-mhard-float', '-specs=rpx/rpx.specs', '-Wl,--relax', '-Wl,--no-warn-rwx-segments', f'@link/{g.name}.rsp'] + wraps + aac + extra
     argv += ['-Wl,--start-group', f'-L{WUT}/lib', f'-L{CAFEGLSL_PPC}/lib', '-lcafeglsl', '-lwut', '-lstdc++', '-lm', '-lc', '-lsysbase', '-lgcc', '-Wl,--end-group', f'@link/{g.name}_code.rsp', '-o', elf]
     r = run(argv, cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
     errors = sorted({re.sub(r'^.*ld(\.exe)?: ', '', x) for x in r.stdout.splitlines() if re.search(r'undefined reference|error|multiple definition|truncated', x)})
@@ -486,12 +471,12 @@ def link_game(g, rt, code, link_flags=None):
     print(f'linked in {time.time() - t0:.0f} s')
     out = g.rpx
     with open(g.nm, 'wb') as f:
-        run([BIN + 'nm.exe', '-n', elf], cwd=WORK, stdout=f)
-    r = run(['elf2rpl.exe', elf, os.path.relpath(out, WORK).replace('\\', '/')], cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        run([PPC('nm'), '-n', elf], cwd=WORK, stdout=f)
+    r = run([HOST.elf2rpl, elf, os.path.relpath(out, WORK).replace('\\', '/')], cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
     if r.returncode:
         sys.exit('elf2rpl failed:\n' + r.stdout[-1000:])
-    size = run([BIN + 'size.exe', elf], cwd=WORK, capture_output=True, text=True).stdout.splitlines()[-1][:70]
-    heads = run([BIN + 'objdump.exe', '-h', elf], cwd=WORK, capture_output=True, text=True).stdout
+    size = run([PPC('size'), elf], cwd=WORK, capture_output=True, text=True).stdout.splitlines()[-1][:70]
+    heads = run([PPC('objdump'), '-h', elf], cwd=WORK, capture_output=True, text=True).stdout
     print(size)
     # the last build known to boot on the console imported coreinit gx2 proc_ui sndcore2 sysapp vpad: anything else here is a suspect if a build hangs at its splash
     print('imports:', ' '.join(sorted(set(re.findall(r'\.fimport_([A-Za-z0-9_]+)', heads)))))
@@ -507,14 +492,16 @@ def build_shadergen(args):
         return os.environ['THREEDII_SHADERGEN']
     d = WORK + '/shadergen'
     os.makedirs(d, exist_ok=True)
-    flags = HOST_CXX + ['-std=c++20', '-O1', '-w', f'-I{PORT}/wiiu', f'-I{PORT}/pc/win', f'-I{PORT}/pc', f'-I{RT}', f'-I{RT}/gpu', '-include', f'{PORT}/pc/shim.h']
+    flags = HOST_CXX + ['-std=c++20', '-O1', '-w', f'-I{PORT}/wiiu', f'-I{PORT}/pc', f'-I{RT}', f'-I{RT}/gpu', '-include', f'{PORT}/pc/shim.h']
+    if HOST.win:
+        flags += [f'-I{PORT}/pc/win']
     sources = [ROOT + '/tools/shadergen_main.cpp', PORT + '/wiiu/shadergen.cpp', PORT + '/wiiu/shaderkeys.cpp', RT + '/gpu/shader.cpp', ROOT + '/tools/win/shadergen_stubs.cpp']
     items = [(os.path.basename(s), s, f'{d}/{os.path.basename(s)}.o', flags) for s in sources]
     compile_all(items, args.jobs, 'shader generator')
-    exe = d + '/shadergen.exe'
+    exe = d + '/shadergen' + HOST.suffix
     objs = [i[2] for i in items]
     if not os.path.exists(exe) or any(os.path.getmtime(o) > os.path.getmtime(exe) for o in objs):
-        r = run(HOST_CXX + ['-static', *objs, '-lpthread', '-o', exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        r = run(HOST_CXX + (['-static'] if HOST.win else []) + [*objs, '-lpthread', '-o', exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
         if r.returncode:
             sys.exit('shadergen did not link:\n' + r.stdout[-1500:])
     return exe
@@ -650,7 +637,7 @@ def prepare_logs(g):
 
 def build_shaders(g, args):
     if not os.path.exists(GLSLC):
-        sys.exit('no shader compiler yet: run tools/win/build_cafeglsl.ps1 once')
+        sys.exit('no CafeGLSL v0.2.0 host compiler: run python tools/setup.py --check; see builder/README.md')
     exe = build_shadergen(args)
     prepare_logs(g)
     os.makedirs(g.shaders, exist_ok=True)
@@ -847,10 +834,15 @@ def main():
     ap.add_argument('--opt')
     ap.add_argument('--out', help='put the RPX, game.nm and shaders here instead, to keep a test build apart')
     args = ap.parse_args()
+    if args.command in ('trial', 'lazy') and not HOST.win:
+        ap.error('the headless trial and lazy compiler currently require Windows; the Linux Wii U build uses code/shaders/all')
+    if args.jobs < 1:
+        ap.error('--jobs must be at least 1')
+    problems = HOST.problems(code=args.command in ('code', 'all'), shaders=args.command in ('shaders', 'all'))
+    if problems:
+        sys.exit('Missing build dependencies:\n  ' + '\n  '.join(problems))
     if not os.path.isdir(f'{ROOT}/games/{args.game}'):
         sys.exit(f'no games/{args.game}')
-    if not os.path.exists(BIN + 'gcc.exe'):
-        sys.exit('no toolchain: run tools/win/install_toolchain.sh once')
     g = Game(args.game)
     if args.mixed:
         g.mixed()

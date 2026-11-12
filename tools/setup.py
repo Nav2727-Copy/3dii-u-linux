@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gets a Windows PC ready to build 3Dii U: python tools/setup.py [--check]
+"""Checks a Windows or Linux PC for building 3Dii U: python tools/setup.py [--check]
 
 Checks every tool the build needs, installs what it can, and says how to get the rest. Run it again after installing
 anything: it skips what's already there. --check only reports, and changes nothing.
@@ -15,10 +15,13 @@ import sys
 import tempfile
 import zipfile
 
+import build_host
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MSYS2 = 'C:/msys64'
 LLVM = 'C:/Program Files/LLVM'
-DEVKITPRO = 'C:/devkitPro/opt/devkitpro'
+HOST = build_host.Toolchain(ROOT)
+DEVKITPRO = HOST.dkp
 TOOLCHAIN = ['devkitppc-gcc', 'devkitppc-binutils', 'devkitppc-newlib', 'devkitppc-crtls', 'wut', 'wut-tools', 'general-tools']
 PIP = {'PySide6': 'PySide6-Essentials', 'pyctr': 'pyctr', 'Crypto': 'pycryptodome', 'cryptography': 'cryptography'}
 
@@ -132,19 +135,62 @@ def pack():
           f'  gh release create {DEPS_TAG} "{out}" --title "Build dependencies" --notes "Unpacked by tools/setup.py"')
 
 
+def import_target_libraries(path):
+    """The release bundle's Wii U libraries are usable from either host OS. Keep its Windows programs out of Linux setup."""
+    if sha256(path) != DEPS_SHA256:
+        raise ValueError(f'{path}: not the expected {DEPS_ZIP} (SHA-256 mismatch)')
+    prefixes = ('third_party/cafeglsl_ppc/', 'toolchain/aac_ppc/')
+    with zipfile.ZipFile(path) as z:
+        for entry in z.infolist():
+            name = entry.filename
+            if not name.startswith(prefixes) and name != NOTICE:
+                continue
+            target = os.path.abspath(os.path.join(ROOT, name))
+            if os.path.commonpath((ROOT, target)) != ROOT:
+                raise ValueError(f'unsafe archive member: {name}')
+            if entry.is_dir():
+                os.makedirs(target, exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with z.open(entry) as src, open(target, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+
+
+def linux_checks():
+    rows = [CHECKS[0]]  # Python packages can be installed in the active virtual environment.
+    rows += [(name, lambda good=good: good, None, remedy) for name, good, remedy in HOST.checks()]
+    makerom = HOST.find('THREEDII_MAKEROM', ROOT + '/builder/bin/makerom', 'makerom')
+    rows.append(('makerom v0.19.0 (CIA conversion)', lambda: build_host.executable(makerom), None,
+                 'put the Linux makerom v0.19.0 executable in builder/bin/makerom or on PATH; '
+                 'https://github.com/3DSGuy/Project_CTR/releases/tag/makerom-v0.19.0'))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--check', action='store_true', help='only report, change nothing')
     ap.add_argument('--pack', action='store_true', help='maintainers: write the dependencies zip from this PC')
+    ap.add_argument('--deps-archive', help='Linux: import Wii U libraries from the verified 3dii-u-deps-1.zip release bundle')
     a = ap.parse_args()
-    if os.name != 'nt':
-        sys.exit('The build runs on Windows only for now.')
+    if not HOST.win and not sys.platform.startswith('linux'):
+        ap.error('the builder supports Windows and Linux')
+    if a.check and (a.deps_archive or a.pack):
+        ap.error('--check cannot be combined with --deps-archive or --pack')
     if sys.version_info < (3, 10):
         sys.exit('Python 3.10 or newer is needed: https://www.python.org/')
     if a.pack:
+        if not HOST.win:
+            ap.error('--pack currently packages the Windows dependency bundle')
         return pack()
+    if a.deps_archive:
+        if HOST.win:
+            ap.error('--deps-archive is for Linux; Windows setup downloads its complete bundle')
+        try:
+            import_target_libraries(a.deps_archive)
+        except (OSError, ValueError, zipfile.BadZipFile) as e:
+            ap.error(str(e))
     todo = []
-    for name, ok, install, by_hand in CHECKS:
+    for name, ok, install, by_hand in CHECKS if HOST.win else linux_checks():
         if not ok() and install and not a.check:
             print(f'{name}: installing', flush=True)
             install()

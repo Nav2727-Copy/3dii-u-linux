@@ -45,7 +45,9 @@ movable.sed
 # The builder's standalone app and PyInstaller's work folder are build outputs; makerom.exe comes from Project_CTR's releases.
 /builder/dist/
 /builder/build_app/
+/builder/build_linux_app/
 /builder/bin/*.exe
+/builder/bin/makerom
 
 # These hold this PC's console address and paths until they take them as arguments.
 /tools/console_*

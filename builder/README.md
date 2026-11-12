@@ -60,7 +60,7 @@ Mods made for Luma3DS on a 3DS work as they come: a `.zip` or a folder with `lum
 
 ## What it needs on the PC
 
-Windows 10 or 11 for now (Linux is planned):
+The released standalone app is for Windows 10 or 11. Experimental Linux source setup is below.
 - **The standalone app needs nothing else.**
   - It carries its own Python, Qt, pyctr and makerom.
   - Its `engine` folder holds the rest: the recompiler, the runtime's sources, devkitPro's PowerPC toolchain with wut, the CafeGLSL shader compiler, and a ready-built shader generator.
@@ -79,6 +79,99 @@ Windows 10 or 11 for now (Linux is planned):
   - LLVM, in `C:\Program Files\LLVM`.
   - MSYS2's `mingw-w64-x86_64-gcc`, in `C:\msys64`.
   - The CafeGLSL shader compiler, from `tools/win/build_cafeglsl.ps1`.
+
+## Linux source builds (experimental)
+
+The shared build driver now supports Linux hosts. The GUI, native shader compiler, full Wii U runtime linked with
+synthetic ARM code, and a synthetic title's WUP round trip have passed checks on Linux x86-64. A real game still needs
+to be built and validated on a Wii U. The developer-only `trial`/`lazy` commands are not implemented on Linux.
+
+From the repository root:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install PySide6-Essentials pyctr pycryptodome cryptography
+```
+
+Install devkitPro pacman using its [Linux setup guide](https://devkitpro.org/wiki/devkitPro_pacman), then install
+`wiiu-dev` with `sudo dkp-pacman -Syu --needed wiiu-dev`. The driver finds `/opt/devkitpro` even if the shell has not
+loaded devkitPro's profile. Install a native C++20 compiler as well (Ubuntu's `build-essential` provides one).
+
+The remaining dependencies are kept inside the project:
+
+| Dependency | Location |
+|---|---|
+| Native Linux [CafeGLSL v0.2.0](https://github.com/Exzap/CafeGLSL/releases/tag/v0.2.0): download `glslcompiler.elf` | Rename to `third_party/cafeglsl/glslcompiler` |
+| Native Linux [makerom v0.19.0](https://github.com/3DSGuy/Project_CTR/releases/tag/makerom-v0.19.0): download `makerom-v0.19.0-ubuntu_x86_64.zip` | Extract the executable to `builder/bin/makerom` |
+| CafeGLSL Wii U headers and library | `third_party/cafeglsl_ppc/cafeglsl-1.0.0-rc1-wiiu-ppc/` |
+| FFmpeg AAC headers and libraries compiled for Wii U | `toolchain/aac_ppc/` |
+
+Unpack the native executables at the locations above and give them execute permission (`chmod +x <path>`). Keep the
+host CafeGLSL at v0.2.0: later versions have produced incorrect vertex shaders in this project. The shader generator
+itself is built automatically from source.
+
+The Wii U libraries can be reused from the project's `3dii-u-deps-1.zip` dependency release. Download that bundle
+from [the project's releases](https://github.com/J-Glitch2502/3dii-u/releases), then import it with:
+
+```sh
+.venv/bin/python tools/setup.py --deps-archive /path/to/3dii-u-deps-1.zip
+.venv/bin/python tools/setup.py --check
+```
+
+The importer verifies the bundle against the project's existing SHA-256 before copying only its Wii U libraries and
+notices. `--check` changes nothing and returns a nonzero status when dependencies are missing. Linux setup can install
+missing Python packages into the active environment; native tool downloads and system package installation are manual.
+
+`DEVKITPRO` and `DEVKITPPC` override the SDK/compiler locations; `THREEDII_DEVKITPRO` selects an entire bundled SDK.
+Optional overrides are `CXX` (a native compiler executable), `THREEDII_GLSLC`, `THREEDII_MAKEROM`,
+`THREEDII_CAFEGLSL_PPC`, `THREEDII_AAC`, and `THREEDII_SHADERGEN` (an already-built native generator).
+
+Run the checks and open the app:
+
+```sh
+.venv/bin/python tools/selftest.py
+.venv/bin/python tools/test_linux_build.py
+.venv/bin/python tools/test_linux_build.py --full
+.venv/bin/python builder/app.py
+```
+
+To create a runnable ZIP for Ubuntu 26.04 x86-64 (using this checkout's Python 3.14 environment and devkitPro SDK):
+
+```sh
+.venv/bin/python builder/make_linux_zip.py
+```
+
+It writes `builder/dist/3Dii U Builder Linux.zip`. Extract the full archive and run `./run-builder.sh`. The ZIP includes
+the app, Python packages, and Wii U toolchain. It requires Ubuntu 26.04 x86-64 with `/usr/bin/python3.14` available;
+it is a portable folder bundle for that Linux environment.
+
+The full check uses a tiny program authored in the test and a random encryption key; it requires no console files
+and deletes its temporary output. It does not test real-game compatibility or boot a Wii U.
+
+For your first game build, use a base game without updates or mods. Gather:
+
+- Your `.3ds`, `.cci`, `.cia`, `.cxi` or `.app` game dump.
+- Your Wii U's `otp.bin` (1024 bytes).
+- Your 3DS's `0004009b` system archives, including the shared font and Mii data. The builder accepts an emulator's
+  user folder, a dumped `title/0004009b` folder, or extracted `<title id>.romfs` files.
+- For encrypted dumps, your `boot9.bin` and any required `seeddb.bin` in `~/.3ds`, or another folder selected in the app.
+
+Open the app with `.venv/bin/python builder/app.py`, choose the game, select the OTP and system archive folder under
+**Your files**, and choose an output folder or mounted SD card. Choose **Build it!** and use **Show details** for the log.
+
+The same build from the command line (replace all `/path/to/` placeholders with your paths):
+
+```sh
+.venv/bin/python builder/pipeline.py --game "/path/to/game.3ds" \
+  --otp "/path/to/otp.bin" --emulator "/path/to/3ds-system-files" --out "dist/linux-test"
+```
+
+Encrypted dumps also need your own `boot9.bin` and any required seeds in `~/.3ds`, or a folder passed with `--keys`.
+To copy directly to an already-mounted SD card, use `--card "/media/your-user/SD-CARD"` instead of `--out`. Otherwise
+copy the generated game folder from `dist/linux-test` into the SD card's `install/` folder. Install with WUP Installer
+GX2 on your Wii U; the prerequisites in the root README still apply.
+The builder uses `build_linux_builder/` for compiled objects, separately from Windows' cache. The step-by-step driver
+keeps its existing path, `tools/win/build3ds.py`, and uses `build_linux/` on Linux.
 
 ## How it works
 

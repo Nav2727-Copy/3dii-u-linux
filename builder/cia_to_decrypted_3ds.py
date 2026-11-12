@@ -26,6 +26,7 @@ except ImportError:
 
 # Default paths for makerom and key files
 KNOWN_MAKEROM_PATHS = [
+    os.environ.get('THREEDII_MAKEROM', ''),
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", "makerom.exe" if os.name == "nt" else "makerom"),
     os.path.join(os.path.dirname(__file__), "makerom.exe"),
     os.path.join(os.path.dirname(__file__), "makerom-v0.19.0-win_x86_64", "makerom.exe"),
@@ -34,7 +35,8 @@ KNOWN_MAKEROM_PATHS = [
 
 def find_makerom():
     for p in KNOWN_MAKEROM_PATHS:
-        if p and os.path.isfile(p):
+        p = (shutil.which(p) or p) if p else ''
+        if p and os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     return None
 
